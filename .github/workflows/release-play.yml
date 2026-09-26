@@ -1,4 +1,4 @@
-# Runs when release is pushed to (normally by merging a version branch like v2.3.11 through a PR).
+# Runs when release is pushed to (normally by merging a branch through a PR).
 # Analyze, test, build an arm64 app bundle, and publish it live to Play's production track.
 name: Release → Play Store
 

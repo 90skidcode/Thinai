@@ -116,6 +116,8 @@ Review your changes with `git diff` and `git status` prior to staging and commit
 
 ## Pull Request Guidelines
 
+**Target Branch**: All pull requests should target the `main` branch. The `release` branch is reserved for maintainers to trigger production deployments.
+
 1. **Keep PRs Focused**: Address a single feature or bug fix per PR.
 2. **Follow Code Quality**: Ensure `dart format .` and `flutter analyze` pass cleanly.
 3. **Add or Update Tests**: Include tests covering new functionality or bug fixes.
