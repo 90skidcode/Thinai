@@ -34,8 +34,27 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
-      - name: Verify code formatting
-        run: dart format --output=none --set-exit-if-changed .
+      - name: Verify code formatting (changed Dart files only)
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            base_sha="${{ github.event.pull_request.base.sha }}"
+          else
+            base_sha="${{ github.event.before }}"
+          fi
+
+          mapfile -t dart_files < <(
+            git diff --name-only --diff-filter=ACMR "$base_sha" "${{ github.sha }}" -- '*.dart' ':!third_party/**'
+          )
+
+          if (( ${#dart_files[@]} == 0 )); then
+            echo "No changed Dart files to format-check."
+            exit 0
+          fi
+
+          dart format --output=none --set-exit-if-changed "${dart_files[@]}"
 
       - name: Static analysis
         run: flutter analyze
