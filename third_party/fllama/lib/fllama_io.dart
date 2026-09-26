@@ -12,25 +12,95 @@ import 'package:fllama/io/fllama_bindings_generated.dart';
 import 'package:fllama/io/fllama_io_helpers.dart';
 import 'package:fllama/misc/openai.dart';
 
-typedef FllamaInferenceCallback = void Function(
-    String response, String openaiResponseJsonString, bool done);
-typedef FllamaMlcLoadCallback = void Function(
-    double downloadProgress, double loadProgress);
+typedef FllamaInferenceCallback =
+    void Function(String response, String openaiResponseJsonString, bool done);
+typedef FllamaMlcLoadCallback =
+    void Function(double downloadProgress, double loadProgress);
 
 /// The dynamic library in which the symbols for [FllamaBindings] can be found.
 final DynamicLibrary fllamaDylib = () {
+  // 1. Prefer native asset code-asset resolution if supported by the embedder
+  try {
+    return DynamicLibrary.codeAsset('package:fllama/fllama_io.dart');
+  } catch (_) {
+    // DynamicLibrary.codeAsset is not supported yet by flutter_tester or older embedders.
+  }
+
+  // 2. Explicit environment override (e.g. CI runtime library path)
+  final envPath =
+      Platform.environment['FLLAMA_DYLIB_PATH'] ??
+      Platform.environment['FLLAMA_LIBRARY_PATH'];
+  if (envPath != null && envPath.isNotEmpty && File(envPath).existsSync()) {
+    return DynamicLibrary.open(envPath);
+  }
+
   const String fllamaLibName = 'fllama';
   if (Platform.isMacOS || Platform.isIOS) {
-    return DynamicLibrary.open('$fllamaLibName.framework/$fllamaLibName');
+    try {
+      return DynamicLibrary.open('$fllamaLibName.framework/$fllamaLibName');
+    } catch (_) {
+      try {
+        return DynamicLibrary.open('lib$fllamaLibName.dylib');
+      } catch (_) {
+        final found = _findSharedLib('lib$fllamaLibName.dylib');
+        if (found != null) return DynamicLibrary.open(found);
+        rethrow;
+      }
+    }
   }
   if (Platform.isAndroid || Platform.isLinux) {
-    return DynamicLibrary.open('lib$fllamaLibName.so');
+    try {
+      return DynamicLibrary.open('lib$fllamaLibName.so');
+    } catch (_) {
+      final found = _findSharedLib('lib$fllamaLibName.so');
+      if (found != null) return DynamicLibrary.open(found);
+      rethrow;
+    }
   }
   if (Platform.isWindows) {
-    return DynamicLibrary.open('$fllamaLibName.dll');
+    try {
+      return DynamicLibrary.open('$fllamaLibName.dll');
+    } catch (_) {
+      final found = _findSharedLib('$fllamaLibName.dll');
+      if (found != null) return DynamicLibrary.open(found);
+      rethrow;
+    }
   }
   throw UnsupportedError('Unknown platform: ${Platform.operatingSystem}');
 }();
+
+String? _findSharedLib(String fileName) {
+  // Check directory containing the running script/executable, Directory.current,
+  // and traverse upwards to find repository build output in .dart_tool or build
+  Directory? current = Directory.current;
+  for (var i = 0; i < 5 && current != null; i++) {
+    final searchDirs = [
+      Directory('${current.path}/.dart_tool/hooks_runner/shared/fllama/build'),
+      Directory('${current.path}/.dart_tool/hooks_runner'),
+      Directory('${current.path}/build'),
+    ];
+    for (final dir in searchDirs) {
+      if (!dir.existsSync()) continue;
+      try {
+        for (final entity in dir.listSync(
+          recursive: true,
+          followLinks: false,
+        )) {
+          if (entity is File &&
+              (entity.path.endsWith('/$fileName') ||
+                  entity.path.endsWith('\\$fileName') ||
+                  entity.path == fileName)) {
+            return entity.path;
+          }
+        }
+      } catch (_) {}
+    }
+    final parent = current.parent;
+    if (parent.path == current.path) break;
+    current = parent;
+  }
+  return null;
+}
 
 /// The bindings to the native functions in [fllamaDylib].
 final FllamaBindings fllamaBindings = FllamaBindings(fllamaDylib);
@@ -45,8 +115,9 @@ Future<String> fllamaChatTemplateGet(String modelPath) {
   // - Phi 2 has no template, either intended or in the model.
   // - Mistral 7B via OpenHermes has no template and intends ChatML.
   final filenamePointer = stringToPointerChar(modelPath);
-  final templatePointer =
-      fllamaBindings.fllama_get_chat_template(filenamePointer);
+  final templatePointer = fllamaBindings.fllama_get_chat_template(
+    filenamePointer,
+  );
   calloc.free(filenamePointer);
   if (templatePointer == nullptr) {
     return Future.value('');
@@ -93,24 +164,28 @@ Future<String> fllamaBosTokenGet(String modelPath) async {
 ///
 /// MLC uses WebGPU to achieve ~native inference speeds.
 Future<int> fllamaChatMlcWeb(
-    OpenAiRequest request,
-    FllamaMlcLoadCallback loadCallback,
-    FllamaInferenceCallback callback) async {
+  OpenAiRequest request,
+  FllamaMlcLoadCallback loadCallback,
+  FllamaInferenceCallback callback,
+) async {
   // ignore: avoid_print
   print(
-      'WARNING: called fllamaChatMlcWeb on native platform. Using fllamaChat instead.');
+    'WARNING: called fllamaChatMlcWeb on native platform. Using fllamaChat instead.',
+  );
   return fllamaChat(request, callback);
 }
 
 Future<void> fllamaMlcWebModelDelete(String modelId) async {
   // ignore: avoid_print
   print(
-      'WARNING: called fllamaMlcWebModelDelete on native platform. Ignoring.');
+    'WARNING: called fllamaMlcWebModelDelete on native platform. Ignoring.',
+  );
 }
 
 Future<bool> fllamaMlcIsWebModelDownloaded(String modelId) async {
   // ignore: avoid_print
   print(
-      'WARNING: called fllamaMlcIsWebModelDownloaded on native platform. Returning false.');
+    'WARNING: called fllamaMlcIsWebModelDownloaded on native platform. Returning false.',
+  );
   return false;
 }

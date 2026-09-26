@@ -38,17 +38,6 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-pub-
 
-      # fllama is expensive to compile because it builds C/C++ code.
-      # Cache the native build output so unchanged fllama code does
-      # not need to be compiled on every build run.
-      - name: Cache fllama native build
-        uses: actions/cache@v4
-        with:
-          path: .dart_tool/hooks_runner/shared/fllama
-          key: ${{ runner.os }}-fllama-${{ hashFiles('pubspec.lock', 'third_party/fllama/**') }}
-          restore-keys: |
-            ${{ runner.os }}-fllama-
-
       - name: Install dependencies
         run: flutter pub get
 

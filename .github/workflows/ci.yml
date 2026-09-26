@@ -47,17 +47,6 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-pub-
 
-      # fllama is expensive to compile because it builds C/C++ code.
-      # Cache the native build output so unchanged fllama code does
-      # not need to be compiled on every CI run.
-      - name: Cache fllama native build
-        uses: actions/cache@v4
-        with:
-          path: .dart_tool/hooks_runner/shared/fllama
-          key: ${{ runner.os }}-fllama-${{ hashFiles('pubspec.lock', 'third_party/fllama/**') }}
-          restore-keys: |
-            ${{ runner.os }}-fllama-
-
       - name: Install dependencies
         run: flutter pub get
 
@@ -87,6 +76,25 @@ jobs:
 
       - name: Static analysis
         run: flutter analyze
+
+      - name: Inspect native library diagnostics & runtime path
+        shell: bash
+        run: |
+          echo "=== Locating libfllama.so in .dart_tool ==="
+          find .dart_tool -name "libfllama.so" -type f -print || true
+          echo "=== Locating libfllama.so across repository ==="
+          find . -name "libfllama.so" -type f -print || true
+          echo "=== Inspecting native asset registration in .dart_tool ==="
+          find .dart_tool -name "output.json" -type f -exec cat {} + || true
+
+          # If libfllama.so is found, configure runtime library path
+          lib_path=$(find .dart_tool -name "libfllama.so" -type f 2>/dev/null | head -n 1 || true)
+          if [[ -n "$lib_path" ]]; then
+            lib_dir=$(dirname "$lib_path")
+            echo "Configuring LD_LIBRARY_PATH with $lib_dir"
+            echo "LD_LIBRARY_PATH=$lib_dir:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
+            echo "FLLAMA_DYLIB_PATH=$(pwd)/$lib_path" >> "$GITHUB_ENV"
+          fi
 
       - name: Run unit & widget tests with coverage
         run: flutter test --coverage
