@@ -39,27 +39,49 @@ class ApiServer {
 
   Future<void> start(ApiServerConfig config) async {
     if (_server != null) return;
+
+    // LAN mode must never run without authentication.
+    if (config.lanMode &&
+        (config.bearerToken == null || config.bearerToken!.isEmpty)) {
+      throw StateError(
+        'LAN API cannot start without a bearer authentication token.',
+      );
+    }
+
     _config = config;
 
     final root = Router();
+
     root.mount('/', ollamaRouter().call);
     root.mount('/', openAiRouter().call);
+
     root.get(
       '/',
       (Request req) =>
           Response.ok('Thinai is running. See /api/tags or /v1/models.'),
     );
 
-    final handler = const Pipeline()
+    var pipeline = const Pipeline()
         .addMiddleware(_corsMiddleware())
-        .addMiddleware(_authMiddleware(config.bearerToken))
-        .addMiddleware(_errorMiddleware())
-        .addHandler(root.call);
+        .addMiddleware(_errorMiddleware());
+
+    if (config.lanMode) {
+      pipeline = pipeline.addMiddleware(
+        _authMiddleware(config.bearerToken!),
+      );
+    }
+
+    final handler = pipeline.addHandler(root.call);
 
     final address = config.lanMode
         ? InternetAddress.anyIPv4
         : InternetAddress.loopbackIPv4;
-    _server = await shelf_io.serve(handler, address, config.port);
+
+    _server = await shelf_io.serve(
+      handler,
+      address,
+      config.port,
+    );
   }
 
   Future<void> stop() async {
@@ -87,17 +109,22 @@ const _corsHeaders = {
   'Access-Control-Allow-Headers': 'Content-Type, Authorization',
 };
 
-Middleware _authMiddleware(String? token) {
-  if (token == null || token.isEmpty) return (h) => h;
+Middleware _authMiddleware(String token) {
   return (Handler inner) {
     return (Request req) async {
-      final auth = req.headers['authorization'] ?? '';
-      if (auth != 'Bearer $token') {
+      final authorization = req.headers['authorization'];
+
+      if (authorization != 'Bearer $token') {
         return Response.unauthorized(
-          jsonEncode({'error': 'unauthorized'}),
-          headers: {'content-type': 'application/json'},
+          jsonEncode({
+            'error': 'unauthorized',
+          }),
+          headers: {
+            'content-type': 'application/json',
+          },
         );
       }
+
       return inner(req);
     };
   };

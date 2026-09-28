@@ -197,6 +197,10 @@ class _ServerPageState extends ConsumerState<ServerPage> {
             port: status.port,
             onChanged: _setLanShare,
           ),
+          if (lanShare) ...[
+            const SizedBox(height: 12),
+            const _LanApiTokenCard(),
+          ],
           const SizedBox(height: 20),
           _ApiReferenceHeader(base: base),
           const SizedBox(height: 12),
@@ -367,6 +371,247 @@ class _ServerPageState extends ConsumerState<ServerPage> {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _LanApiTokenCard extends ConsumerStatefulWidget {
+  const _LanApiTokenCard();
+
+  @override
+  ConsumerState<_LanApiTokenCard> createState() => _LanApiTokenCardState();
+}
+
+class _LanApiTokenCardState extends ConsumerState<_LanApiTokenCard> {
+  bool _showToken = false;
+  bool _regenerating = false;
+
+  Future<void> _copyToken(String token) async {
+    await Clipboard.setData(ClipboardData(text: token));
+
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: const Text('API token copied'),
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _regenerate() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Regenerate API token?'),
+        content: const Text(
+          'Existing LAN clients using the current token will lose access. '
+          'You will need to give them the new token.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Regenerate'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true || !mounted) return;
+
+    setState(() => _regenerating = true);
+
+    try {
+      final controller = ref.read(serverControllerProvider.notifier);
+      final status = ref.read(serverControllerProvider);
+      final lan = ref.read(lanShareProvider);
+
+      if (status.running && lan) {
+        await controller.stop();
+      }
+
+      await regenerateServerBearerToken();
+
+      if (status.running && lan) {
+        await controller.start(
+          port: status.port,
+          lanMode: true,
+        );
+      }
+
+      ref.invalidate(serverBearerTokenProvider);
+
+      if (mounted) {
+        setState(() => _showToken = false);
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text('API token regenerated'),
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _regenerating = false);
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final tokenAsync = ref.watch(serverBearerTokenProvider);
+
+    return Card(
+      margin: EdgeInsets.zero,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: tokenAsync.when(
+          loading: () => const Row(
+            children: [
+              SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+              SizedBox(width: 12),
+              Text('Loading API token...'),
+            ],
+          ),
+          error: (error, _) => Text(
+            'Unable to load API token',
+            style: TextStyle(color: scheme.error),
+          ),
+          data: (token) {
+            if (token == null || token.isEmpty) {
+              return const Text(
+                'LAN authentication token has not been generated yet.',
+              );
+            }
+
+            final masked =
+                '${token.substring(0, 6)}••••••••••••••••${token.substring(token.length - 6)}';
+
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(
+                      Icons.key_rounded,
+                      color: scheme.primary,
+                    ),
+                    const SizedBox(width: 10),
+                    const Expanded(
+                      child: Text(
+                        'LAN API authentication',
+                        style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+
+                const SizedBox(height: 8),
+
+                Text(
+                  'Use this bearer token when connecting from another device.',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: scheme.onSurfaceVariant,
+                  ),
+                ),
+
+                const SizedBox(height: 14),
+
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 12,
+                  ),
+                  decoration: BoxDecoration(
+                    color: scheme.surfaceContainerHighest,
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: SelectableText(
+                    _showToken ? token : masked,
+                    style: const TextStyle(
+                      fontFamily: 'monospace',
+                      fontSize: 12,
+                    ),
+                  ),
+                ),
+
+                const SizedBox(height: 10),
+
+                Row(
+                  children: [
+                    OutlinedButton.icon(
+                      onPressed: () {
+                        setState(() => _showToken = !_showToken);
+                      },
+                      icon: Icon(
+                        _showToken
+                            ? Icons.visibility_off_rounded
+                            : Icons.visibility_rounded,
+                      ),
+                      label: Text(_showToken ? 'Hide' : 'Show'),
+                    ),
+
+                    const SizedBox(width: 8),
+
+                    FilledButton.icon(
+                      onPressed: () => _copyToken(token),
+                      icon: const Icon(Icons.copy_rounded),
+                      label: const Text('Copy'),
+                    ),
+
+                    const Spacer(),
+
+                    IconButton(
+                      tooltip: 'Regenerate token',
+                      onPressed: _regenerating ? null : _regenerate,
+                      icon: _regenerating
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                              ),
+                            )
+                          : const Icon(Icons.refresh_rounded),
+                    ),
+                  ],
+                ),
+
+                const SizedBox(height: 4),
+
+                Text(
+                  'Anyone with this token can access the LAN API.',
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: scheme.error,
+                  ),
+                ),
+              ],
+            );
+          },
+        ),
       ),
     );
   }
