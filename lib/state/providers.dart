@@ -23,6 +23,8 @@ import '../server/lan_address.dart';
 import '../update/app_updater.dart';
 import '../web/web_search.dart';
 
+import 'dart:math';
+
 final llmEngineProvider = Provider<LlmEngine>((ref) => LlmEngine.instance);
 final modelStoreProvider = Provider<ModelStore>((ref) => ModelStore.instance);
 final modelImporterProvider = Provider<ModelImporter>(
@@ -68,6 +70,8 @@ const _kServerPortKey = 'server_port';
 const _kChatHistoryKey = 'chat_history_v1'; // superseded, migrated on load
 const _kChatSessionsKey = 'chat_sessions_v1';
 const _kWebSearchKey = 'web_search_enabled';
+
+const _kServerBearerTokenKey = 'server_bearer_token';
 
 // ─── theme ──────────────────────────────────────────────────────────────────
 
@@ -940,6 +944,49 @@ String _normalizeModelKey(String input) {
   return key;
 }
 
+
+Future<String> _getOrCreateServerBearerToken() async {
+  final prefs = await SharedPreferences.getInstance();
+
+  final existing = prefs.getString(_kServerBearerTokenKey);
+  if (existing != null && existing.isNotEmpty) {
+    return existing;
+  }
+
+  final random = Random.secure();
+
+  // 32 random bytes = 256 bits of entropy.
+  final bytes = List<int>.generate(32, (_) => random.nextInt(256));
+
+  final token = base64UrlEncode(bytes);
+
+  await prefs.setString(_kServerBearerTokenKey, token);
+
+  return token;
+}
+
+/// Returns the current LAN API bearer token, if one has been created.
+final serverBearerTokenProvider = FutureProvider<String?>((ref) async {
+  final prefs = await SharedPreferences.getInstance();
+  return prefs.getString(_kServerBearerTokenKey);
+});
+
+/// Generates a new LAN API bearer token.
+///
+/// The running server must be restarted by the UI after this operation so
+/// that the new token becomes the active authentication credential.
+Future<String> regenerateServerBearerToken() async {
+  final prefs = await SharedPreferences.getInstance();
+
+  final random = Random.secure();
+  final bytes = List<int>.generate(32, (_) => random.nextInt(256));
+  final token = base64UrlEncode(bytes);
+
+  await prefs.setString(_kServerBearerTokenKey, token);
+
+  return token;
+}
+
 // ─── server ─────────────────────────────────────────────────────────────────
 
 class ServerStatus {
@@ -970,15 +1017,33 @@ class ServerController extends StateNotifier<ServerStatus> {
 
   Future<void> start({required int port, bool lanMode = false}) async {
     try {
-      await _server.start(ApiServerConfig(port: port, lanMode: lanMode));
+      String? bearerToken;
+
+      if (lanMode) {
+        bearerToken = await _getOrCreateServerBearerToken();
+      }
+
+      await _server.start(
+        ApiServerConfig(
+          port: port,
+          lanMode: lanMode,
+          bearerToken: bearerToken,
+        ),
+      );
+
       final ip = lanMode ? await lanIpv4() : null;
+
       state = ServerStatus(
         running: true,
         port: _server.port ?? port,
         lan: lanMode,
         lanIp: ip,
       );
-      await _remember(running: true, port: state.port);
+
+      await _remember(
+        running: true,
+        port: state.port,
+      );
     } catch (e) {
       state = ServerStatus(
         running: false,
@@ -986,7 +1051,11 @@ class ServerController extends StateNotifier<ServerStatus> {
         lan: lanMode,
         error: e.toString(),
       );
-      await _remember(running: false, port: port);
+
+      await _remember(
+        running: false,
+        port: port,
+      );
     }
   }
 
