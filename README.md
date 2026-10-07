@@ -88,7 +88,7 @@ Upstream fllama exposes no embedding FFI, so `third_party/fllama` is a vendored 
 ### 1. Clone and Install Dependencies
 
 ```bash
-git clone https://github.com/ATmega-Software-Technologies/Thinai.git
+git clone https://github.com/Abhinivesh2729/Thinai.git
 cd Thinai
 flutter pub get
 ```
