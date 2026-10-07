@@ -292,6 +292,9 @@ class LlmEngine {
   final _queue = <_QueuedJob>[];
   bool _busy = false;
 
+  /// Consecutive GPU load failures; a rested backend is served on the CPU.
+  final gpuFailures = GpuFailureTracker();
+
   void setActiveModel(String? path, {String? projectorPath}) {
     _activeModelPath = path;
     _activeProjectorPath = projectorPath;
@@ -444,9 +447,13 @@ class LlmEngine {
   }
 
   Future<void> _run(_QueuedJob job) async {
-    final onGpu =
-        job.options.gpuBackend != GpuBackend.none &&
+    var onGpu = job.options.gpuBackend != GpuBackend.none &&
         job.options.numGpuLayers > 0;
+    // A backend that keeps failing loads rests for a while and the request
+    // runs on the CPU; the saved setting is left alone.
+    if (onGpu && gpuFailures.isRested(job.options.gpuBackend)) {
+      onGpu = false;
+    }
     final request = OpenAiRequest(
       messages: job.messages
           .map(
@@ -493,6 +500,7 @@ class LlmEngine {
 
     final completer = Completer<void>();
     var lastRaw = '';
+    var loadFailed = false;
 
     // A cancel from a previous request must not carry over into this one.
     _cancelPending = false;
@@ -537,6 +545,7 @@ class LlmEngine {
       // so requiring a non-empty response keeps the two apart.
       final isError =
           callbacks == 1 && done && openAiJson.isEmpty && response.isNotEmpty;
+      if (isError && onGpu && !gpuProven) loadFailed = true;
 
       // Throughput counts raw tokens, not visible ones, so holding text back
       // for stop-word matching does not make the live tok/s sag.
@@ -609,6 +618,15 @@ class LlmEngine {
 
     await completer.future;
     _currentRequestId = null;
+    // A load that never produced a token counts towards resting the backend;
+    // the first token clears the count (gpuProven doubles as the success mark).
+    if (onGpu) {
+      if (loadFailed) {
+        gpuFailures.recordFailure(job.options.gpuBackend);
+      } else if (gpuProven) {
+        gpuFailures.recordSuccess(job.options.gpuBackend);
+      }
+    }
     if (!job.controller.isClosed) {
       await job.controller.close();
     }
